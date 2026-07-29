@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="주식 & ETF 백테스팅 계산기", layout="wide")
 
 # ---------------------------------------------------------
-# [스타일 추가] 아이폰 13 미니 전용 모바일 텍스트 짤림/줄바꿈 방지 & UI 최적화
+# [스타일 추가] 아이폰 13 미니 전용 모바일 최적화 & 시세 전광판 스타일
 # ---------------------------------------------------------
 st.markdown(
     """
@@ -20,20 +20,17 @@ st.markdown(
     <link href="https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700;800&display=swap" rel="stylesheet">
 
     <style>
-        /* 기본 폰트 적용 */
         html, body, [class*="css"], .stMarkdown {
             font-family: 'Nanum Gothic', sans-serif;
             -webkit-font-smoothing: antialiased;
         }
 
-        /* [핵심 1] 드롭다운(Selectbox) 내부 글씨 줄바꿈 방지 및 말줄임표 처리 */
         div[data-baseweb="select"] * {
             white-space: nowrap !important;
             text-overflow: ellipsis !important;
             overflow: hidden !important;
         }
 
-        /* [핵심 2] 드롭다운 클릭 시 메뉴 항목 한 줄 고정 */
         ul[role="listbox"] li {
             white-space: nowrap !important;
             text-overflow: ellipsis !important;
@@ -41,12 +38,10 @@ st.markdown(
             font-size: 13px !important;
         }
 
-        /* [핵심 3] 모든 텍스트 영역 LTR(왼쪽->오른쪽) 고정 */
         div[data-testid="stMarkdownContainer"], .stRadio, .stTextInput, .stNumberInput, .stSelectbox {
             direction: ltr !important;
         }
 
-        /* 메인 로고 스타일 정의 */
         .logo-container {
             display: flex;
             align-items: center;
@@ -69,32 +64,16 @@ st.markdown(
             direction: ltr;
         }
 
-        /* 모바일 반응형 크기 최적화 */
         @media (max-width: 768px) {
-            .logo-text-large {
-                font-size: 26px !important;
-            }
-            .logo-text-small {
-                font-size: 14px !important;
-            }
-            .logo-chart {
-                width: 26px !important;
-                height: 26px !important;
-            }
+            .logo-text-large { font-size: 26px !important; }
+            .logo-text-small { font-size: 14px !important; }
+            .logo-chart { width: 26px !important; height: 26px !important; }
         }
 
-        /* PC 크기 설정 */
         @media (min-width: 769px) {
-            .logo-text-large {
-                font-size: 44px !important;
-            }
-            .logo-text-small {
-                font-size: 20px !important;
-            }
-            .logo-chart {
-                width: 44px !important;
-                height: 44px !important;
-            }
+            .logo-text-large { font-size: 44px !important; }
+            .logo-text-small { font-size: 20px !important; }
+            .logo-chart { width: 44px !important; height: 44px !important; }
         }
     </style>
     """,
@@ -120,19 +99,19 @@ logo_html = """
 st.markdown(logo_html, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [세션 상태 관리]
+# [실시간 주가 조회 함수]
 # ---------------------------------------------------------
-if "monthly_amount" not in st.session_state:
-    st.session_state.monthly_amount = 50
-
-if "lump_amount" not in st.session_state:
-    st.session_state.lump_amount = 1000
-
-def adjust_monthly(delta):
-    st.session_state.monthly_amount = max(1, st.session_state.monthly_amount + delta)
-
-def adjust_lump(delta):
-    st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
+def get_realtime_price(ticker_symbol):
+    try:
+        t = yf.Ticker(ticker_symbol)
+        fast_info = t.fast_info
+        price = fast_info['lastPrice']
+        prev_close = fast_info['previousClose']
+        change = price - prev_close
+        pct_change = (change / prev_close) * 100
+        return price, change, pct_change
+    except Exception:
+        return None, None, None
 
 # ---------------------------------------------------------
 # [데이터베이스] 국내 전체 종목 & ETF DB
@@ -143,7 +122,6 @@ def load_all_market_data():
     etf_stocks = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
 
-    # 1. 국내 ETF
     try:
         url_etf = "https://finance.naver.com/api/sise/etfItemList.nhn"
         res_etf = requests.get(url_etf, headers=headers, timeout=5).json()
@@ -154,7 +132,6 @@ def load_all_market_data():
     except Exception:
         pass
 
-    # 2. 국내 주식
     try:
         df_krx = fdr.StockListing('KRX')
         for _, row in df_krx.iterrows():
@@ -252,7 +229,6 @@ if "개별 주식" in search_category:
             options=list(combined_results.keys())
         )
         target_ticker = combined_results[selected_name]
-        st.sidebar.success(f"선택 티커: **{target_ticker}**")
     else:
         st.sidebar.warning("결과 없음. 티커를 직접 입력하세요.")
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="005930.KS")
@@ -268,10 +244,39 @@ else:
             options=list(combined_results.keys())
         )
         target_ticker = combined_results[selected_name]
-        st.sidebar.success(f"선택 티커: **{target_ticker}**")
     else:
         st.sidebar.warning("결과 없음. 티커를 직접 입력하세요.")
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="069500.KS")
+
+# ---------------------------------------------------------
+# [실시간 시세 영역]
+# ---------------------------------------------------------
+rt_price, rt_change, rt_pct = get_realtime_price(target_ticker)
+
+if rt_price is not None:
+    is_kr = target_ticker.endswith(".KS") or target_ticker.endswith(".KQ")
+    price_fmt = f"{rt_price:,.0f} 원" if is_kr else f"${rt_price:,.2f}"
+    
+    if rt_change >= 0:
+        change_fmt = f"+{rt_change:,.0f} 원 (+{rt_pct:.2f}%)" if is_kr else f"+${rt_change:,.2f} (+{rt_pct:.2f}%)"
+        price_color = "#dc3545" # 상승(빨강)
+    else:
+        change_fmt = f"{rt_change:,.0f} 원 ({rt_pct:.2f}%)" if is_kr else f"-${abs(rt_change):,.2f} ({rt_pct:.2f}%)"
+        price_color = "#0d6efd" # 하락(파랑)
+
+    st.markdown(
+        f"""
+        <div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); direction: ltr;">
+            <div style="font-size: 0.9rem; color: #6c757d; font-weight: bold;">⚡ 선택 종목 실시간 현재가</div>
+            <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 5px;">
+                <span style="font-size: 1.8rem; font-weight: 800; color: #212529;">{price_fmt}</span>
+                <span style="font-size: 1.1rem; font-weight: 700; color: {price_color};">{change_fmt}</span>
+            </div>
+            <div style="font-size: 0.75rem; color: #adb5bd; margin-top: 3px;">* 장중 실시간 시세 / 마감 후 전일 종가 기준</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 st.sidebar.markdown("---")
 
@@ -284,42 +289,22 @@ investment_plan = st.sidebar.radio(
 
 years = st.sidebar.number_input("투자 기간 (년)", min_value=1, max_value=30, value=3, step=1)
 
+# 증감 버튼 제외하고 입력 상자만 유지
 if "1안" in investment_plan:
-    st.sidebar.subheader("매월 투자 금액 (만원)")
-    st.sidebar.number_input("금액 입력 (만원)", min_value=1, key="monthly_amount", label_visibility="collapsed")
-    
-    col_p1, col_p5, col_p10, col_p50 = st.sidebar.columns(4)
-    col_p1.button("+1만", on_click=adjust_monthly, args=(1,), use_container_width=True)
-    col_p5.button("+5만", on_click=adjust_monthly, args=(5,), use_container_width=True)
-    col_p10.button("+10만", on_click=adjust_monthly, args=(10,), use_container_width=True)
-    col_p50.button("+50만", on_click=adjust_monthly, args=(50,), use_container_width=True)
-
-    col_m1, col_m5, col_m10, col_m50 = st.sidebar.columns(4)
-    col_m1.button("-1만", on_click=adjust_monthly, args=(-1,), use_container_width=True)
-    col_m5.button("-5만", on_click=adjust_monthly, args=(-5,), use_container_width=True)
-    col_m10.button("-10만", on_click=adjust_monthly, args=(-10,), use_container_width=True)
-    col_m50.button("-50만", on_click=adjust_monthly, args=(-50,), use_container_width=True)
-
-    monthly_amount_ten_thousand = st.session_state.monthly_amount
+    monthly_amount_ten_thousand = st.sidebar.number_input(
+        "매월 투자 금액 (만원)", 
+        min_value=1, 
+        value=50, 
+        step=5
+    )
     lump_sum_ten_thousand = 0
-
 else:
-    st.sidebar.subheader("거치 투자 금액 (만원)")
-    st.sidebar.number_input("금액 입력 (만원)", min_value=10, key="lump_amount", label_visibility="collapsed")
-    
-    col_p1, col_p5, col_p10, col_p50 = st.sidebar.columns(4)
-    col_p1.button("+10만", on_click=adjust_lump, args=(10,), use_container_width=True)
-    col_p5.button("+50만", on_click=adjust_lump, args=(50,), use_container_width=True)
-    col_p10.button("+100만", on_click=adjust_lump, args=(100,), use_container_width=True)
-    col_p50.button("+500만", on_click=adjust_lump, args=(500,), use_container_width=True)
-
-    col_m1, col_m5, col_m10, col_m50 = st.sidebar.columns(4)
-    col_m1.button("-10만", on_click=adjust_lump, args=(-10,), use_container_width=True)
-    col_m5.button("-50만", on_click=adjust_lump, args=(-50,), use_container_width=True)
-    col_m10.button("-100만", on_click=adjust_lump, args=(-100,), use_container_width=True)
-    col_m50.button("-500만", on_click=adjust_lump, args=(-500,), use_container_width=True)
-
-    lump_sum_ten_thousand = st.session_state.lump_amount
+    lump_sum_ten_thousand = st.sidebar.number_input(
+        "거치 투자 금액 (만원)", 
+        min_value=10, 
+        value=1000, 
+        step=50
+    )
     monthly_amount_ten_thousand = 0
 
 st.sidebar.markdown("---")
@@ -359,10 +344,9 @@ if run_button:
             if price_series.empty:
                 st.error("❌ 해당 기간의 주가 데이터가 존재하지 않습니다.")
             else:
-                end_price = float(price_series.iloc[-1])
+                end_price = rt_price if rt_price is not None else float(price_series.iloc[-1])
                 dates = price_series.index
 
-                # 화폐 단위 설정 (국내: 원 / 해외: 달러)
                 if target_ticker.endswith(".KS") or target_ticker.endswith(".KQ"):
                     price_str = f"{end_price:,.0f} 원"
                 else:
@@ -404,7 +388,6 @@ if run_button:
                 profit_amount = final_value - total_invested
                 return_rate = (profit_amount / total_invested) * 100 if total_invested > 0 else 0
 
-                # 1. 성과 대시보드 (현재 1주당 가격 카드 포함 5개 카드 구성)
                 color_code = "#28a745" if profit_amount >= 0 else "#dc3545"
                 st.markdown(
                     f"""
@@ -436,7 +419,6 @@ if run_button:
                     unsafe_allow_html=True
                 )
 
-                # 2. 대형 고정 이미지 그래프
                 st.subheader("📈 자산 성장 추이")
                 
                 fig, ax = plt.subplots(figsize=(12, 6))
