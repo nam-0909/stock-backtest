@@ -3,16 +3,44 @@ import yfinance as yf
 import pandas as pd
 import requests
 import time
-import FinanceDataReader as fdr
+import os
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.font_manager as fm
 from datetime import datetime, timedelta
+
+# ---------------------------------------------------------
+# [1] 한글 폰트 자동 다운로드 & Matplotlib 설정 (폰트 깨짐 완벽 방지)
+# ---------------------------------------------------------
+@st.cache_resource
+def setup_korean_font():
+    font_path = "NanumGothic.ttf"
+    if not os.path.exists(font_path):
+        url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
+        try:
+            r = requests.get(url, timeout=10)
+            with open(font_path, "wb") as f:
+                f.write(r.content)
+        except Exception as e:
+            st.warning(f"폰트 다운로드 실패: {e}")
+            return None
+    
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        font_prop = fm.FontProperties(fname=font_path)
+        font_name = font_prop.get_name()
+        plt.rc('font', family=font_name)
+        plt.rcParams['axes.unicode_minus'] = False
+        return font_name
+    return None
+
+setup_korean_font()
 
 # 페이지 기본 설정
 st.set_page_config(page_title="주식 & ETF 백테스팅 계산기", layout="wide")
 
 # ---------------------------------------------------------
-# [스타일 추가] 아이폰 13 미니 전용 모바일 최적화 & 시세 전광판 스타일
+# [2] 스타일 및 모바일 최적화 (좌우 반전 방지)
 # ---------------------------------------------------------
 st.markdown(
     """
@@ -82,7 +110,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# [UI 적용] 로고 레이아웃
+# [3] 로고 레이아웃
 # ---------------------------------------------------------
 logo_html = """
 <div class="logo-container">
@@ -100,7 +128,7 @@ logo_html = """
 st.markdown(logo_html, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [세션 상태 관리]
+# [4] 세션 상태 관리
 # ---------------------------------------------------------
 if "monthly_amount" not in st.session_state:
     st.session_state.monthly_amount = 50
@@ -115,7 +143,7 @@ def adjust_lump(delta):
     st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
 
 # ---------------------------------------------------------
-# [완전 실시간 시세 추출 엔진]
+# [5] 실시간 시세 추출
 # ---------------------------------------------------------
 def get_exact_realtime_price(ticker_symbol):
     timestamp = int(time.time() * 1000)
@@ -126,7 +154,6 @@ def get_exact_realtime_price(ticker_symbol):
     
     is_kr = ticker_symbol.endswith(".KS") or ticker_symbol.endswith(".KQ")
     
-    # 1. 국내 주식 및 국내 ETF
     if is_kr:
         code = ticker_symbol.split('.')[0]
         try:
@@ -136,8 +163,6 @@ def get_exact_realtime_price(ticker_symbol):
             return price
         except Exception:
             pass
-
-    # 2. 해외 주식 및 해외 ETF
     else:
         try:
             url = f"https://m.stock.naver.com/api/html/item/getGfItemHeader.nhn?symbol={ticker_symbol}&_t={timestamp}"
@@ -152,7 +177,6 @@ def get_exact_realtime_price(ticker_symbol):
         except Exception:
             pass
 
-    # 3. 해외주식/ETF 백업 (Yahoo Finance)
     try:
         t = yf.Ticker(ticker_symbol)
         fast_info = t.fast_info
@@ -162,11 +186,10 @@ def get_exact_realtime_price(ticker_symbol):
         return None
 
 # ---------------------------------------------------------
-# [데이터베이스] 국내 전체 종목 & ETF DB
+# [6] 데이터베이스 및 검색
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def load_all_market_data():
-    equity_stocks = {}
     etf_stocks = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
 
@@ -180,22 +203,17 @@ def load_all_market_data():
     except Exception:
         pass
 
-    try:
-        df_krx = fdr.StockListing('KRX')
-        for _, row in df_krx.iterrows():
-            name = str(row['Name']).strip()
-            code = str(row['Code']).zfill(6)
-            equity_stocks[f"[국내] {name} ({code})"] = f"{code}.KS"
-    except Exception:
-        pass
-
+    equity_stocks = {
+        "[국내] 삼성전자 (005930)": "005930.KS",
+        "[국내] SK하이닉스 (000660)": "000660.KS",
+        "[국내] NAVER (035420)": "035420.KS",
+        "[국내] 카카오 (035720)": "035720.KS",
+        "[국내] 현대차 (005380)": "005380.KS"
+    }
     return equity_stocks, etf_stocks
 
 EQUITY_DB, ETF_DB = load_all_market_data()
 
-# ---------------------------------------------------------
-# [검색 엔진] 해외 통합 검색 Engine
-# ---------------------------------------------------------
 US_POPULAR_MAPPING = {
     "s&p": [("SPY", "SPDR S&P 500"), ("IVV", "iShares Core S&P 500"), ("VOO", "Vanguard S&P 500"), ("SPLG", "SPDR Portfolio S&P 500")],
     "sp500": [("SPY", "SPDR S&P 500"), ("VOO", "Vanguard S&P 500"), ("IVV", "iShares Core S&P 500")],
@@ -248,7 +266,7 @@ def search_us_stocks_and_etfs(query, target_type="EQUITY"):
     return results
 
 # ---------------------------------------------------------
-# 사이드바 설정
+# [7] 사이드바 설정
 # ---------------------------------------------------------
 st.sidebar.header("🔍 1. 종목 & ETF 검색")
 
@@ -258,8 +276,8 @@ search_category = st.sidebar.radio(
 )
 
 keyword_input = st.sidebar.text_input(
-    "단어/글자 일부 입력 (예: 한, 삼, AAPL, S&P, QQQ)",
-    value="한화" if "개별 주식" in search_category else "S&P"
+    "단어/글자 일부 입력 (예: 삼, AAPL, S&P, QQQ)",
+    value="삼" if "개별 주식" in search_category else "S&P"
 )
 
 clean_kw = keyword_input.strip().lower()
@@ -297,7 +315,7 @@ else:
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="069500.KS")
 
 # ---------------------------------------------------------
-# [실시간 시세 영역] 깔끔한 현재가 전용 표시
+# [8] 실시간 시세 전광판
 # ---------------------------------------------------------
 col_price, col_refresh = st.columns([5, 1])
 
@@ -306,7 +324,6 @@ with col_refresh:
     st.write("")
     refresh_click = st.button("🔄 시세 새로고침", use_container_width=True)
 
-# 실시간 현재가만 가져오기
 rt_price = get_exact_realtime_price(target_ticker)
 
 with col_price:
@@ -330,7 +347,6 @@ with col_price:
         st.warning("⚠️ 실시간 시세를 불러오는 중입니다. 잠시 후 다시 새로고침을 눌러주세요.")
 
 st.sidebar.markdown("---")
-
 st.sidebar.header("⚙️ 2. 투자 조건 설정")
 
 investment_plan = st.sidebar.radio(
@@ -378,7 +394,7 @@ st.sidebar.markdown("---")
 run_button = st.sidebar.button("🚀 수익률 계산하기", use_container_width=True)
 
 # ---------------------------------------------------------
-# 메인 분석 결과 출력
+# [9] 백테스팅 계산 및 3가지 선 그래프 출력
 # ---------------------------------------------------------
 if run_button:
     try:
@@ -414,10 +430,8 @@ if run_button:
                 end_price = rt_price if rt_price is not None else float(price_series.iloc[-1])
                 dates = price_series.index
 
-                if target_ticker.endswith(".KS") or target_ticker.endswith(".KQ"):
-                    price_str = f"{end_price:,.0f} 원"
-                else:
-                    price_str = f"${end_price:,.2f}"
+                is_kr = target_ticker.endswith(".KS") or target_ticker.endswith(".KQ")
+                price_str = f"{end_price:,.0f} 원" if is_kr else f"${end_price:,.2f}"
 
                 invested_history = []
                 value_history = []
@@ -486,24 +500,33 @@ if run_button:
                     unsafe_allow_html=True
                 )
 
-                st.subheader("📈 자산 성장 추이")
+                st.subheader(f"📈 {years}년 자산 증식 & 주가 추이 (3가지 비교)")
                 
-                fig, ax = plt.subplots(figsize=(12, 6))
-                
+                # 3개의 선을 그리기 위한 이중 축(Twin Axis) 구성
+                fig, ax1 = plt.subplots(figsize=(12, 6))
+
                 inv_man = [v / 10000 for v in invested_history]
                 val_man = [v / 10000 for v in value_history]
 
-                ax.plot(dates, inv_man, label="투자 원금 (만원)", color="#1f77b4", linewidth=3)
-                ax.plot(dates, val_man, label="평가 금액 (만원)", color="#ff7f0e", linewidth=3)
+                # 왼쪽 Y축: 투자 원금 & 자산 평가 금액
+                line1 = ax1.plot(dates, inv_man, label="1. 투자 원금 (만원)", color="#1f77b4", linewidth=2.5, linestyle="--")
+                line2 = ax1.plot(dates, val_man, label="2. 총 자산 평가액 (만원)", color="#ff7f0e", linewidth=3)
+                ax1.set_ylabel("자산 금액 (만원)", fontsize=13, fontweight='bold', color="#333333")
 
-                ax.set_ylabel("금액 (만원)", fontsize=14, fontweight='bold', labelpad=10)
-                ax.grid(True, linestyle="--", alpha=0.5)
-                ax.legend(loc="upper left", fontsize=13)
+                # 오른쪽 Y축: 순수 주식/ETF 단가 추이
+                ax2 = ax1.twinx()
+                stock_prices = price_series.values
+                unit_label = "원" if is_kr else "$"
+                line3 = ax2.plot(dates, stock_prices, label=f"3. 주가 추이 ({unit_label})", color="#2ca02c", linewidth=2, linestyle=":")
+                ax2.set_ylabel(f"주가 ({unit_label})", fontsize=13, fontweight='bold', color="#2ca02c")
 
-                ax.tick_params(axis='x', labelsize=12)
-                ax.tick_params(axis='y', labelsize=12)
+                # 범례(Legend) 합치기
+                lines = line1 + line2 + line3
+                labels = [l.get_label() for l in lines]
+                ax1.legend(lines, labels, loc="upper left", fontsize=12, frameon=True, facecolor="white")
 
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                ax1.grid(True, linestyle="--", alpha=0.5)
+                ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
                 plt.xticks(rotation=0)
                 plt.tight_layout()
 
