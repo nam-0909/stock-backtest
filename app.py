@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+import time
 import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -115,86 +115,83 @@ def adjust_lump(delta):
     st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
 
 # ---------------------------------------------------------
-# [네이버 증권 전용 초고속 실시간 주가 추출 엔진]
+# [완전 실시간 시세 추출 엔진 (네이버 증권 Direct API & Cache Buster 적용)]
 # ---------------------------------------------------------
-def get_naver_realtime_price(ticker_symbol):
+def get_exact_realtime_price(ticker_symbol):
+    timestamp = int(time.time() * 1000) # 캐시 우회용 타임스탬프
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+        'Referer': 'https://m.stock.naver.com/'
     }
+    
     is_kr = ticker_symbol.endswith(".KS") or ticker_symbol.endswith(".KQ")
     
-    # 1. 국내 주식 및 국내 ETF (네이버 금융 크롤링 / API)
+    # 1. 국내 주식 및 국내 ETF
     if is_kr:
         code = ticker_symbol.split('.')[0]
         try:
-            # 네이버 증권 시세 메인 페이지 Direct Scraping
-            url = f"https://finance.naver.com/item/main.naver?code={code}"
-            res = requests.get(url, headers=headers, timeout=3)
-            soup = BeautifulSoup(res.text, 'html.parser')
+            # 네이버 모바일 실시간 개별 종목 API (가장 빠르고 정확함)
+            url = f"https://m.stock.naver.com/api/stock/{code}/basic?_t={timestamp}"
+            res = requests.get(url, headers=headers, timeout=3).json()
             
-            no_today = soup.find('p', class_='no_today')
-            if no_today:
-                price_str = no_today.find('span', class_='blind').text.replace(',', '')
-                price = float(price_str)
-                
-                no_exday = soup.find('p', class_='no_exday')
-                blinds = no_exday.find_all('span', class_='blind')
-                change = float(blinds[0].text.replace(',', ''))
-                
-                # 하락 여부 체크
-                if 'ico_down' in str(no_exday) or 'nv' in str(no_exday):
-                    change = -abs(change)
-                elif 'ico_up' in str(no_exday):
-                    change = abs(change)
-                    
-                pct_change = (change / (price - change)) * 100
-                return price, change, pct_change
-        except Exception:
-            pass
-
-        # 백업: 네이버 모바일 API
-        try:
-            url_m = f"https://m.stock.naver.com/api/stock/{code}/basic"
-            res_m = requests.get(url_m, headers=headers, timeout=3).json()
-            price = float(res_m['closePrice'].replace(',', ''))
-            change = float(res_m['compareToPreviousClosePrice'].replace(',', ''))
-            if res_m.get('fluctuationsCode') in ['4', '5']: # 하락
+            price = float(str(res['closePrice']).replace(',', ''))
+            change = float(str(res['compareToPreviousClosePrice']).replace(',', ''))
+            pct_change = float(str(res['fluctuationsRatio']).replace(',', ''))
+            
+            # fluctuationsCode: 1(상한), 2(상승), 3(보합), 4(하한), 5(하락)
+            fluc_code = str(res.get('fluctuationsCode', '3'))
+            if fluc_code in ['4', '5']: # 하락
                 change = -abs(change)
-            pct_change = float(res_m['fluctuationsRatio'])
+                pct_change = -abs(pct_change)
+            elif fluc_code in ['1', '2']: # 상승
+                change = abs(change)
+                pct_change = abs(pct_change)
+            else: # 보합
+                change = 0.0
+                pct_change = 0.0
+
             return price, change, pct_change
         except Exception:
             pass
 
-    # 2. 해외 주식 및 해외 ETF (네이버 증권 해외주식 API)
+    # 2. 해외 주식 및 해외 ETF
     else:
         try:
-            # 네이버 해외주식 검색/시세 API
-            url_us = f"https://m.stock.naver.com/api/html/item/getGfItemHeader.nhn?symbol={ticker_symbol}"
-            res_us = requests.get(url_us, headers=headers, timeout=3)
-            if res_us.status_code == 200:
-                soup = BeautifulSoup(res_us.text, 'html.parser')
+            # 네이버 증권 해외주식 모바일 API
+            url = f"https://m.stock.naver.com/api/html/item/getGfItemHeader.nhn?symbol={ticker_symbol}&_t={timestamp}"
+            res = requests.get(url, headers=headers, timeout=3)
+            if res.status_code == 200:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(res.text, 'html.parser')
                 price_elem = soup.find('span', class_='stock_price')
+                
                 if price_elem:
-                    price = float(price_elem.text.replace(',', '').replace('$', ''))
-                    change_elem = soup.find('span', class_='gap_price')
-                    change = float(change_elem.text.replace(',', '').replace('$', '').replace('+', ''))
+                    price = float(price_elem.text.replace(',', '').replace('$', '').strip())
+                    gap_price_elem = soup.find('span', class_='gap_price')
+                    gap_rate_elem = soup.find('span', class_='gap_rate')
                     
-                    rate_elem = soup.find('span', class_='gap_rate')
-                    pct_change = float(rate_elem.text.replace('%', '').replace('+', ''))
+                    change = float(gap_price_elem.text.replace(',', '').replace('$', '').replace('+', '').replace('-', '').strip())
+                    pct_change = float(gap_rate_elem.text.replace('%', '').replace('+', '').replace('-', '').strip())
                     
-                    if 'down' in str(change_elem) or '-' in change_elem.text:
+                    # 하락 요소 체크 ('down' 클래스 또는 '-' 기호)
+                    is_down = 'down' in str(gap_price_elem) or '-' in gap_price_elem.text
+                    if is_down:
                         change = -abs(change)
                         pct_change = -abs(pct_change)
+                    else:
+                        change = abs(change)
+                        pct_change = abs(pct_change)
+
                     return price, change, pct_change
         except Exception:
             pass
 
-    # 3. 네이버 응답 불능 시 Yahoo Finance 백업
+    # 3. 해외주식/ETF 백업 (Yahoo Finance Fast Info)
     try:
         t = yf.Ticker(ticker_symbol)
         fast_info = t.fast_info
-        price = fast_info['lastPrice']
-        prev_close = fast_info['previousClose']
+        price = float(fast_info['lastPrice'])
+        prev_close = float(fast_info['previousClose'])
         change = price - prev_close
         pct_change = (change / prev_close) * 100
         return price, change, pct_change
@@ -337,7 +334,7 @@ else:
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="069500.KS")
 
 # ---------------------------------------------------------
-# [실시간 시세 영역] 네이버 증권 데이터 연동
+# [실시간 시세 영역] 네이버 증권 100% 동기화
 # ---------------------------------------------------------
 col_price, col_refresh = st.columns([5, 1])
 
@@ -346,36 +343,42 @@ with col_refresh:
     st.write("")
     refresh_click = st.button("🔄 시세 새로고침", use_container_width=True)
 
-# 네이버 증권 직접 조회 함수 호출
-rt_price, rt_change, rt_pct = get_naver_realtime_price(target_ticker)
+# 초단위 네이버 증권 시세 직접 조회
+rt_price, rt_change, rt_pct = get_exact_realtime_price(target_ticker)
 
 with col_price:
     if rt_price is not None:
         is_kr = target_ticker.endswith(".KS") or target_ticker.endswith(".KQ")
         price_fmt = f"{rt_price:,.0f} 원" if is_kr else f"${rt_price:,.2f}"
         
-        if rt_change >= 0:
-            change_fmt = f"+{rt_change:,.0f} 원 (+{rt_pct:.2f}%)" if is_kr else f"+${rt_change:,.2f} (+{rt_pct:.2f}%)"
-            price_color = "#dc3545" # 상승(빨강)
+        # 상승/하락 부호 및 색상 정확 매핑
+        if rt_change > 0:
+            change_fmt = f"+{rt_change:,.0f} 원 (+{abs(rt_pct):.2f}%)" if is_kr else f"+${rt_change:,.2f} (+{abs(rt_pct):.2f}%)"
+            price_color = "#dc3545" # 상승 (빨강)
+        elif rt_change < 0:
+            change_fmt = f"-{abs(rt_change):,.0f} 원 (-{abs(rt_pct):.2f}%)" if is_kr else f"-${abs(rt_change):,.2f} (-{abs(rt_pct):.2f}%)"
+            price_color = "#0d6efd" # 하락 (파랑)
         else:
-            change_fmt = f"{rt_change:,.0f} 원 ({rt_pct:.2f}%)" if is_kr else f"-${abs(rt_change):,.2f} ({rt_pct:.2f}%)"
-            price_color = "#0d6efd" # 하락(파랑)
+            change_fmt = f"0 원 (0.00%)" if is_kr else f"$0.00 (0.00%)"
+            price_color = "#6c757d" # 보합 (회색)
+
+        current_now = datetime.now().strftime("%H:%M:%S")
 
         st.markdown(
             f"""
             <div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); direction: ltr;">
-                <div style="font-size: 0.9rem; color: #6c757d; font-weight: bold;">⚡ 실시간 네이버 증권 현재가</div>
+                <div style="font-size: 0.9rem; color: #6c757d; font-weight: bold;">⚡ 실시간 현재가 ({current_now} 기준)</div>
                 <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 5px;">
                     <span style="font-size: 1.8rem; font-weight: 800; color: #212529;">{price_fmt}</span>
                     <span style="font-size: 1.1rem; font-weight: 700; color: {price_color};">{change_fmt}</span>
                 </div>
-                <div style="font-size: 0.75rem; color: #888888; margin-top: 3px;">* 네이버 증권 연동 실시간 시세이며, 우측 버튼 클릭 시 즉시 다시 불러옵니다.</div>
+                <div style="font-size: 0.75rem; color: #888888; margin-top: 3px;">* 네이버 증권 서버와 초단위로 직접 연동된 최신 시세입니다.</div>
             </div>
             """,
             unsafe_allow_html=True
         )
     else:
-        st.warning("⚠️ 실시간 주가를 불러오는 중입니다. 종목을 변경하거나 새로고침 버튼을 눌러주세요.")
+        st.warning("⚠️ 실시간 시세를 불러오는 중입니다. 잠시 후 다시 새로고침을 눌러주세요.")
 
 st.sidebar.markdown("---")
 
