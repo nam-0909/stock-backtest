@@ -2,5 +2,5 @@ streamlit
 yfinance
 pandas
 requests
-FinanceDataReader
+finance-datareader
 matplotlib
