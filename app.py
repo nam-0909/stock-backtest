@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="주식 & ETF 백테스팅 계산기", layout="wide")
 
 # ---------------------------------------------------------
-# [스타일 추가] 아이폰 13 미니 전용 모바일 텍스트 짤림/줄바꿈 방지
+# [스타일 추가] 아이폰 13 미니 전용 모바일 텍스트 짤림/줄바꿈 방지 & UI 최적화
 # ---------------------------------------------------------
 st.markdown(
     """
@@ -26,19 +26,19 @@ st.markdown(
             -webkit-font-smoothing: antialiased;
         }
 
-        /* [핵심 1] 드롭다운(Selectbox) 내부 글씨가 아래로 넘어가서 잘리는 현상 방지 */
+        /* [핵심 1] 드롭다운(Selectbox) 내부 글씨 줄바꿈 방지 및 말줄임표 처리 */
         div[data-baseweb="select"] * {
             white-space: nowrap !important;
             text-overflow: ellipsis !important;
             overflow: hidden !important;
         }
 
-        /* [핵심 2] 드롭다운 클릭 시 나오는 메뉴 항목들도 한 줄로 고정 & 말줄임표 처리 */
+        /* [핵심 2] 드롭다운 클릭 시 메뉴 항목 한 줄 고정 */
         ul[role="listbox"] li {
             white-space: nowrap !important;
             text-overflow: ellipsis !important;
             overflow: hidden !important;
-            font-size: 13px !important; /* 미니 화면용 폰트 살짝 축소 */
+            font-size: 13px !important;
         }
 
         /* [핵심 3] 모든 텍스트 영역 LTR(왼쪽->오른쪽) 고정 */
@@ -69,7 +69,7 @@ st.markdown(
             direction: ltr;
         }
 
-        /* 모바일(아이폰 미니 등) 반응형 크기 최적화 */
+        /* 모바일 반응형 크기 최적화 */
         @media (max-width: 768px) {
             .logo-text-large {
                 font-size: 26px !important;
@@ -362,6 +362,12 @@ if run_button:
                 end_price = float(price_series.iloc[-1])
                 dates = price_series.index
 
+                # 화폐 단위 설정 (국내: 원 / 해외: 달러)
+                if target_ticker.endswith(".KS") or target_ticker.endswith(".KQ"):
+                    price_str = f"{end_price:,.0f} 원"
+                else:
+                    price_str = f"${end_price:,.2f}"
+
                 invested_history = []
                 value_history = []
 
@@ -398,27 +404,31 @@ if run_button:
                 profit_amount = final_value - total_invested
                 return_rate = (profit_amount / total_invested) * 100 if total_invested > 0 else 0
 
-                # 1. 성과 대시보드
+                # 1. 성과 대시보드 (현재 1주당 가격 카드 포함 5개 카드 구성)
                 color_code = "#28a745" if profit_amount >= 0 else "#dc3545"
                 st.markdown(
                     f"""
                     <div style="direction: ltr; background-color: #f8f9fa; border-radius: 12px; padding: 20px; border-left: 6px solid {color_code}; margin-bottom: 20px;">
-                        <div style="display: flex; flex-wrap: wrap; justify-content: space-around; text-align: center; gap: 10px;">
-                            <div style="flex: 1 1 130px;">
-                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.9rem;">총 투자 원금</h5>
-                                <h3 style="color: #212529; font-size: 1.3rem; font-weight: 700;">{total_invested/10000:,.0f} 만원</h3>
+                        <div style="display: flex; flex-wrap: wrap; justify-content: space-around; text-align: center; gap: 12px;">
+                            <div style="flex: 1 1 110px;">
+                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.85rem;">현재 1주당 가격</h5>
+                                <h3 style="color: #0d6efd; font-size: 1.25rem; font-weight: 700;">{price_str}</h3>
                             </div>
-                            <div style="flex: 1 1 130px;">
-                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.9rem;">최종 평가 금액</h5>
-                                <h3 style="color: #212529; font-size: 1.3rem; font-weight: 700;">{final_value/10000:,.0f} 만원</h3>
+                            <div style="flex: 1 1 110px;">
+                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.85rem;">총 투자 원금</h5>
+                                <h3 style="color: #212529; font-size: 1.25rem; font-weight: 700;">{total_invested/10000:,.0f} 만원</h3>
                             </div>
-                            <div style="flex: 1 1 130px;">
-                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.9rem;">총 수익금</h5>
-                                <h3 style="color: {color_code}; font-size: 1.4rem; font-weight: 800;">{profit_amount/10000:+,.0f} 만원</h3>
+                            <div style="flex: 1 1 110px;">
+                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.85rem;">최종 평가 금액</h5>
+                                <h3 style="color: #212529; font-size: 1.25rem; font-weight: 700;">{final_value/10000:,.0f} 만원</h3>
                             </div>
-                            <div style="flex: 1 1 130px;">
-                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.9rem;">최종 수익률</h5>
-                                <h3 style="color: {color_code}; font-size: 1.4rem; font-weight: 800;">{return_rate:+.2f}%</h3>
+                            <div style="flex: 1 1 110px;">
+                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.85rem;">총 수익금</h5>
+                                <h3 style="color: {color_code}; font-size: 1.35rem; font-weight: 800;">{profit_amount/10000:+,.0f} 만원</h3>
+                            </div>
+                            <div style="flex: 1 1 110px;">
+                                <h5 style="color: #6c757d; margin-bottom: 3px; font-size: 0.85rem;">최종 수익률</h5>
+                                <h3 style="color: {color_code}; font-size: 1.35rem; font-weight: 800;">{return_rate:+.2f}%</h3>
                             </div>
                         </div>
                     </div>
