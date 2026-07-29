@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -114,38 +115,81 @@ def adjust_lump(delta):
     st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
 
 # ---------------------------------------------------------
-# [하이브리드 실시간 주가 조회 함수]
-# 국내 주식: 네이버 금융 실시간 API (딜레이 없음)
-# 해외 주식: 야후 파이낸스
+# [네이버 증권 전용 초고속 실시간 주가 추출 엔진]
 # ---------------------------------------------------------
-def get_realtime_price(ticker_symbol):
+def get_naver_realtime_price(ticker_symbol):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     is_kr = ticker_symbol.endswith(".KS") or ticker_symbol.endswith(".KQ")
     
-    # 1. 국내 주식/ETF인 경우 네이버 금융에서 초단위 실시간 데이터 조회
+    # 1. 국내 주식 및 국내 ETF (네이버 금융 크롤링 / API)
     if is_kr:
         code = ticker_symbol.split('.')[0]
         try:
-            url = f"https://polling.finance.naver.com/api/realtime/market/item/{code}"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers, timeout=3).json()
+            # 네이버 증권 시세 메인 페이지 Direct Scraping
+            url = f"https://finance.naver.com/item/main.naver?code={code}"
+            res = requests.get(url, headers=headers, timeout=3)
+            soup = BeautifulSoup(res.text, 'html.parser')
             
-            data = res['result']['areas'][0]['datas'][0]
-            price = float(data['nv'])           # 현재가
-            change = float(data['cv'])          # 전일 대비 변동액
-            
-            # 상승/하락 구분에 따른 부호 처리 (2: 상승, 5: 하락)
-            rf = data.get('rf', '3')
-            if rf == '5':
-                change = -abs(change)
-            elif rf == '2':
-                change = abs(change)
+            no_today = soup.find('p', class_='no_today')
+            if no_today:
+                price_str = no_today.find('span', class_='blind').text.replace(',', '')
+                price = float(price_str)
                 
-            pct_change = float(data['cr'])      # 변동률 (%)
+                no_exday = soup.find('p', class_='no_exday')
+                blinds = no_exday.find_all('span', class_='blind')
+                change = float(blinds[0].text.replace(',', ''))
+                
+                # 하락 여부 체크
+                if 'ico_down' in str(no_exday) or 'nv' in str(no_exday):
+                    change = -abs(change)
+                elif 'ico_up' in str(no_exday):
+                    change = abs(change)
+                    
+                pct_change = (change / (price - change)) * 100
+                return price, change, pct_change
+        except Exception:
+            pass
+
+        # 백업: 네이버 모바일 API
+        try:
+            url_m = f"https://m.stock.naver.com/api/stock/{code}/basic"
+            res_m = requests.get(url_m, headers=headers, timeout=3).json()
+            price = float(res_m['closePrice'].replace(',', ''))
+            change = float(res_m['compareToPreviousClosePrice'].replace(',', ''))
+            if res_m.get('fluctuationsCode') in ['4', '5']: # 하락
+                change = -abs(change)
+            pct_change = float(res_m['fluctuationsRatio'])
             return price, change, pct_change
         except Exception:
             pass
 
-    # 2. 해외 주식 또는 네이버 조회 실패 시 야후 파이낸스 Fallback
+    # 2. 해외 주식 및 해외 ETF (네이버 증권 해외주식 API)
+    else:
+        try:
+            # 네이버 해외주식 검색/시세 API
+            url_us = f"https://m.stock.naver.com/api/html/item/getGfItemHeader.nhn?symbol={ticker_symbol}"
+            res_us = requests.get(url_us, headers=headers, timeout=3)
+            if res_us.status_code == 200:
+                soup = BeautifulSoup(res_us.text, 'html.parser')
+                price_elem = soup.find('span', class_='stock_price')
+                if price_elem:
+                    price = float(price_elem.text.replace(',', '').replace('$', ''))
+                    change_elem = soup.find('span', class_='gap_price')
+                    change = float(change_elem.text.replace(',', '').replace('$', '').replace('+', ''))
+                    
+                    rate_elem = soup.find('span', class_='gap_rate')
+                    pct_change = float(rate_elem.text.replace('%', '').replace('+', ''))
+                    
+                    if 'down' in str(change_elem) or '-' in change_elem.text:
+                        change = -abs(change)
+                        pct_change = -abs(pct_change)
+                    return price, change, pct_change
+        except Exception:
+            pass
+
+    # 3. 네이버 응답 불능 시 Yahoo Finance 백업
     try:
         t = yf.Ticker(ticker_symbol)
         fast_info = t.fast_info
@@ -293,17 +337,17 @@ else:
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="069500.KS")
 
 # ---------------------------------------------------------
-# [실시간 시세 영역] 새로고침 기능
+# [실시간 시세 영역] 네이버 증권 데이터 연동
 # ---------------------------------------------------------
 col_price, col_refresh = st.columns([5, 1])
 
 with col_refresh:
     st.write("")
     st.write("")
-    if st.button("🔄 시세 새로고침", use_container_width=True):
-        st.cache_data.clear()
+    refresh_click = st.button("🔄 시세 새로고침", use_container_width=True)
 
-rt_price, rt_change, rt_pct = get_realtime_price(target_ticker)
+# 네이버 증권 직접 조회 함수 호출
+rt_price, rt_change, rt_pct = get_naver_realtime_price(target_ticker)
 
 with col_price:
     if rt_price is not None:
@@ -317,21 +361,21 @@ with col_price:
             change_fmt = f"{rt_change:,.0f} 원 ({rt_pct:.2f}%)" if is_kr else f"-${abs(rt_change):,.2f} ({rt_pct:.2f}%)"
             price_color = "#0d6efd" # 하락(파랑)
 
-        source_info = "국네 네이버 금융 실시간 시세" if is_kr else "미국 야후 파이낸스 시세"
-
         st.markdown(
             f"""
             <div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); direction: ltr;">
-                <div style="font-size: 0.9rem; color: #6c757d; font-weight: bold;">⚡ 선택 종목 실시간 현재가</div>
+                <div style="font-size: 0.9rem; color: #6c757d; font-weight: bold;">⚡ 실시간 네이버 증권 현재가</div>
                 <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 5px;">
                     <span style="font-size: 1.8rem; font-weight: 800; color: #212529;">{price_fmt}</span>
                     <span style="font-size: 1.1rem; font-weight: 700; color: {price_color};">{change_fmt}</span>
                 </div>
-                <div style="font-size: 0.75rem; color: #adb5bd; margin-top: 3px;">* 출처: {source_info} (우측 버튼으로 즉시 새로고침 가능)</div>
+                <div style="font-size: 0.75rem; color: #888888; margin-top: 3px;">* 네이버 증권 연동 실시간 시세이며, 우측 버튼 클릭 시 즉시 다시 불러옵니다.</div>
             </div>
             """,
             unsafe_allow_html=True
         )
+    else:
+        st.warning("⚠️ 실시간 주가를 불러오는 중입니다. 종목을 변경하거나 새로고침 버튼을 눌러주세요.")
 
 st.sidebar.markdown("---")
 
@@ -391,7 +435,7 @@ if run_button:
         start_str = start_dt.strftime('%Y-%m-%d')
         end_str = end_dt.strftime('%Y-%m-%d')
 
-        st.info(f"⏳ **{selected_name or target_ticker}** 최근 **{years}년** 분석 중...")
+        st.info(f"⏳ **{selected_name or target_ticker}** 최근 **{years}년** 백테스팅 분석 중...")
 
         df = yf.download(target_ticker, start=start_str, end=end_str)
 
