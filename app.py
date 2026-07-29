@@ -99,8 +99,21 @@ logo_html = """
 st.markdown(logo_html, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [실시간 주가 조회 함수]
+# [세션 상태 관리]
 # ---------------------------------------------------------
+if "monthly_amount" not in st.session_state:
+    st.session_state.monthly_amount = 50
+
+if "lump_amount" not in st.session_state:
+    st.session_state.lump_amount = 1000
+
+def adjust_monthly(delta):
+    st.session_state.monthly_amount = max(1, st.session_state.monthly_amount + delta)
+
+def adjust_lump(delta):
+    st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
+
+# 실시간 주가 가져오는 함수 (Fast Info 활용)
 def get_realtime_price(ticker_symbol):
     try:
         t = yf.Ticker(ticker_symbol)
@@ -249,7 +262,7 @@ else:
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="069500.KS")
 
 # ---------------------------------------------------------
-# [실시간 시세 영역]
+# [실시간 시세 즉시 표시 영역] 백테스팅 클릭 안해도 상단에 표시
 # ---------------------------------------------------------
 rt_price, rt_change, rt_pct = get_realtime_price(target_ticker)
 
@@ -289,22 +302,42 @@ investment_plan = st.sidebar.radio(
 
 years = st.sidebar.number_input("투자 기간 (년)", min_value=1, max_value=30, value=3, step=1)
 
-# 증감 버튼 제외하고 입력 상자만 유지
 if "1안" in investment_plan:
-    monthly_amount_ten_thousand = st.sidebar.number_input(
-        "매월 투자 금액 (만원)", 
-        min_value=1, 
-        value=50, 
-        step=5
-    )
+    st.sidebar.subheader("매월 투자 금액 (만원)")
+    st.sidebar.number_input("금액 입력 (만원)", min_value=1, key="monthly_amount", label_visibility="collapsed")
+    
+    col_p1, col_p5, col_p10, col_p50 = st.sidebar.columns(4)
+    col_p1.button("+1만", on_click=adjust_monthly, args=(1,), use_container_width=True)
+    col_p5.button("+5만", on_click=adjust_monthly, args=(5,), use_container_width=True)
+    col_p10.button("+10만", on_click=adjust_monthly, args=(10,), use_container_width=True)
+    col_p50.button("+50만", on_click=adjust_monthly, args=(50,), use_container_width=True)
+
+    col_m1, col_m5, col_m10, col_m50 = st.sidebar.columns(4)
+    col_m1.button("-1만", on_click=adjust_monthly, args=(-1,), use_container_width=True)
+    col_m5.button("-5만", on_click=adjust_monthly, args=(-5,), use_container_width=True)
+    col_m10.button("-10만", on_click=adjust_monthly, args=(-10,), use_container_width=True)
+    col_m50.button("-50만", on_click=adjust_monthly, args=(-50,), use_container_width=True)
+
+    monthly_amount_ten_thousand = st.session_state.monthly_amount
     lump_sum_ten_thousand = 0
+
 else:
-    lump_sum_ten_thousand = st.sidebar.number_input(
-        "거치 투자 금액 (만원)", 
-        min_value=10, 
-        value=1000, 
-        step=50
-    )
+    st.sidebar.subheader("거치 투자 금액 (만원)")
+    st.sidebar.number_input("금액 입력 (만원)", min_value=10, key="lump_amount", label_visibility="collapsed")
+    
+    col_p1, col_p5, col_p10, col_p50 = st.sidebar.columns(4)
+    col_p1.button("+10만", on_click=adjust_lump, args=(10,), use_container_width=True)
+    col_p5.button("+50만", on_click=adjust_lump, args=(50,), use_container_width=True)
+    col_p10.button("+100만", on_click=adjust_lump, args=(100,), use_container_width=True)
+    col_p50.button("+500만", on_click=adjust_lump, args=(500,), use_container_width=True)
+
+    col_m1, col_m5, col_m10, col_m50 = st.sidebar.columns(4)
+    col_m1.button("-10만", on_click=adjust_lump, args=(-10,), use_container_width=True)
+    col_m5.button("-50만", on_click=adjust_lump, args=(-50,), use_container_width=True)
+    col_m10.button("-100만", on_click=adjust_lump, args=(-100,), use_container_width=True)
+    col_m50.button("-500만", on_click=adjust_lump, args=(-500,), use_container_width=True)
+
+    lump_sum_ten_thousand = st.session_state.lump_amount
     monthly_amount_ten_thousand = 0
 
 st.sidebar.markdown("---")
