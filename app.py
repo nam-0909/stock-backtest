@@ -113,8 +113,39 @@ def adjust_monthly(delta):
 def adjust_lump(delta):
     st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
 
-# 실시간 주가 가져오는 함수 (캐시 우회 및 강제 동기화)
+# ---------------------------------------------------------
+# [하이브리드 실시간 주가 조회 함수]
+# 국내 주식: 네이버 금융 실시간 API (딜레이 없음)
+# 해외 주식: 야후 파이낸스
+# ---------------------------------------------------------
 def get_realtime_price(ticker_symbol):
+    is_kr = ticker_symbol.endswith(".KS") or ticker_symbol.endswith(".KQ")
+    
+    # 1. 국내 주식/ETF인 경우 네이버 금융에서 초단위 실시간 데이터 조회
+    if is_kr:
+        code = ticker_symbol.split('.')[0]
+        try:
+            url = f"https://polling.finance.naver.com/api/realtime/market/item/{code}"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            res = requests.get(url, headers=headers, timeout=3).json()
+            
+            data = res['result']['areas'][0]['datas'][0]
+            price = float(data['nv'])           # 현재가
+            change = float(data['cv'])          # 전일 대비 변동액
+            
+            # 상승/하락 구분에 따른 부호 처리 (2: 상승, 5: 하락)
+            rf = data.get('rf', '3')
+            if rf == '5':
+                change = -abs(change)
+            elif rf == '2':
+                change = abs(change)
+                
+            pct_change = float(data['cr'])      # 변동률 (%)
+            return price, change, pct_change
+        except Exception:
+            pass
+
+    # 2. 해외 주식 또는 네이버 조회 실패 시 야후 파이낸스 Fallback
     try:
         t = yf.Ticker(ticker_symbol)
         fast_info = t.fast_info
@@ -262,7 +293,7 @@ else:
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="069500.KS")
 
 # ---------------------------------------------------------
-# [실시간 시세 영역] 새로고침 기능 추가
+# [실시간 시세 영역] 새로고침 기능
 # ---------------------------------------------------------
 col_price, col_refresh = st.columns([5, 1])
 
@@ -286,6 +317,8 @@ with col_price:
             change_fmt = f"{rt_change:,.0f} 원 ({rt_pct:.2f}%)" if is_kr else f"-${abs(rt_change):,.2f} ({rt_pct:.2f}%)"
             price_color = "#0d6efd" # 하락(파랑)
 
+        source_info = "국네 네이버 금융 실시간 시세" if is_kr else "미국 야후 파이낸스 시세"
+
         st.markdown(
             f"""
             <div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); direction: ltr;">
@@ -294,7 +327,7 @@ with col_price:
                     <span style="font-size: 1.8rem; font-weight: 800; color: #212529;">{price_fmt}</span>
                     <span style="font-size: 1.1rem; font-weight: 700; color: {price_color};">{change_fmt}</span>
                 </div>
-                <div style="font-size: 0.75rem; color: #adb5bd; margin-top: 3px;">* 미국 주식은 15분 지연 시세일 수 있으며, 우측 버튼으로 즉시 새로고침이 가능합니다.</div>
+                <div style="font-size: 0.75rem; color: #adb5bd; margin-top: 3px;">* 출처: {source_info} (우측 버튼으로 즉시 새로고침 가능)</div>
             </div>
             """,
             unsafe_allow_html=True
@@ -311,7 +344,6 @@ investment_plan = st.sidebar.radio(
 
 years = st.sidebar.number_input("투자 기간 (년)", min_value=1, max_value=30, value=3, step=1)
 
-# +1만 / -1만 제거 버전 (3개 컬럼)
 if "1안" in investment_plan:
     st.sidebar.subheader("매월 투자 금액 (만원)")
     st.sidebar.number_input("금액 입력 (만원)", min_value=1, key="monthly_amount", label_visibility="collapsed")
