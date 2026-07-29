@@ -113,7 +113,7 @@ def adjust_monthly(delta):
 def adjust_lump(delta):
     st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
 
-# 실시간 주가 가져오는 함수 (Fast Info 활용)
+# 실시간 주가 가져오는 함수 (캐시 우회 및 강제 동기화)
 def get_realtime_price(ticker_symbol):
     try:
         t = yf.Ticker(ticker_symbol)
@@ -262,34 +262,43 @@ else:
         target_ticker = st.sidebar.text_input("티커 직접 입력", value="069500.KS")
 
 # ---------------------------------------------------------
-# [실시간 시세 즉시 표시 영역] 백테스팅 클릭 안해도 상단에 표시
+# [실시간 시세 영역] 새로고침 기능 추가
 # ---------------------------------------------------------
+col_price, col_refresh = st.columns([5, 1])
+
+with col_refresh:
+    st.write("")
+    st.write("")
+    if st.button("🔄 시세 새로고침", use_container_width=True):
+        st.cache_data.clear()
+
 rt_price, rt_change, rt_pct = get_realtime_price(target_ticker)
 
-if rt_price is not None:
-    is_kr = target_ticker.endswith(".KS") or target_ticker.endswith(".KQ")
-    price_fmt = f"{rt_price:,.0f} 원" if is_kr else f"${rt_price:,.2f}"
-    
-    if rt_change >= 0:
-        change_fmt = f"+{rt_change:,.0f} 원 (+{rt_pct:.2f}%)" if is_kr else f"+${rt_change:,.2f} (+{rt_pct:.2f}%)"
-        price_color = "#dc3545" # 상승(빨강)
-    else:
-        change_fmt = f"{rt_change:,.0f} 원 ({rt_pct:.2f}%)" if is_kr else f"-${abs(rt_change):,.2f} ({rt_pct:.2f}%)"
-        price_color = "#0d6efd" # 하락(파랑)
+with col_price:
+    if rt_price is not None:
+        is_kr = target_ticker.endswith(".KS") or target_ticker.endswith(".KQ")
+        price_fmt = f"{rt_price:,.0f} 원" if is_kr else f"${rt_price:,.2f}"
+        
+        if rt_change >= 0:
+            change_fmt = f"+{rt_change:,.0f} 원 (+{rt_pct:.2f}%)" if is_kr else f"+${rt_change:,.2f} (+{rt_pct:.2f}%)"
+            price_color = "#dc3545" # 상승(빨강)
+        else:
+            change_fmt = f"{rt_change:,.0f} 원 ({rt_pct:.2f}%)" if is_kr else f"-${abs(rt_change):,.2f} ({rt_pct:.2f}%)"
+            price_color = "#0d6efd" # 하락(파랑)
 
-    st.markdown(
-        f"""
-        <div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); direction: ltr;">
-            <div style="font-size: 0.9rem; color: #6c757d; font-weight: bold;">⚡ 선택 종목 실시간 현재가</div>
-            <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 5px;">
-                <span style="font-size: 1.8rem; font-weight: 800; color: #212529;">{price_fmt}</span>
-                <span style="font-size: 1.1rem; font-weight: 700; color: {price_color};">{change_fmt}</span>
+        st.markdown(
+            f"""
+            <div style="background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); direction: ltr;">
+                <div style="font-size: 0.9rem; color: #6c757d; font-weight: bold;">⚡ 선택 종목 실시간 현재가</div>
+                <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 5px;">
+                    <span style="font-size: 1.8rem; font-weight: 800; color: #212529;">{price_fmt}</span>
+                    <span style="font-size: 1.1rem; font-weight: 700; color: {price_color};">{change_fmt}</span>
+                </div>
+                <div style="font-size: 0.75rem; color: #adb5bd; margin-top: 3px;">* 미국 주식은 15분 지연 시세일 수 있으며, 우측 버튼으로 즉시 새로고침이 가능합니다.</div>
             </div>
-            <div style="font-size: 0.75rem; color: #adb5bd; margin-top: 3px;">* 장중 실시간 시세 / 마감 후 전일 종가 기준</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+            """,
+            unsafe_allow_html=True
+        )
 
 st.sidebar.markdown("---")
 
@@ -302,18 +311,17 @@ investment_plan = st.sidebar.radio(
 
 years = st.sidebar.number_input("투자 기간 (년)", min_value=1, max_value=30, value=3, step=1)
 
+# +1만 / -1만 제거 버전 (3개 컬럼)
 if "1안" in investment_plan:
     st.sidebar.subheader("매월 투자 금액 (만원)")
     st.sidebar.number_input("금액 입력 (만원)", min_value=1, key="monthly_amount", label_visibility="collapsed")
     
-    col_p1, col_p5, col_p10, col_p50 = st.sidebar.columns(4)
-    col_p1.button("+1만", on_click=adjust_monthly, args=(1,), use_container_width=True)
+    col_p5, col_p10, col_p50 = st.sidebar.columns(3)
     col_p5.button("+5만", on_click=adjust_monthly, args=(5,), use_container_width=True)
     col_p10.button("+10만", on_click=adjust_monthly, args=(10,), use_container_width=True)
     col_p50.button("+50만", on_click=adjust_monthly, args=(50,), use_container_width=True)
 
-    col_m1, col_m5, col_m10, col_m50 = st.sidebar.columns(4)
-    col_m1.button("-1만", on_click=adjust_monthly, args=(-1,), use_container_width=True)
+    col_m5, col_m10, col_m50 = st.sidebar.columns(3)
     col_m5.button("-5만", on_click=adjust_monthly, args=(-5,), use_container_width=True)
     col_m10.button("-10만", on_click=adjust_monthly, args=(-10,), use_container_width=True)
     col_m50.button("-50만", on_click=adjust_monthly, args=(-50,), use_container_width=True)
@@ -325,14 +333,12 @@ else:
     st.sidebar.subheader("거치 투자 금액 (만원)")
     st.sidebar.number_input("금액 입력 (만원)", min_value=10, key="lump_amount", label_visibility="collapsed")
     
-    col_p1, col_p5, col_p10, col_p50 = st.sidebar.columns(4)
-    col_p1.button("+10만", on_click=adjust_lump, args=(10,), use_container_width=True)
+    col_p5, col_p10, col_p50 = st.sidebar.columns(3)
     col_p5.button("+50만", on_click=adjust_lump, args=(50,), use_container_width=True)
     col_p10.button("+100만", on_click=adjust_lump, args=(100,), use_container_width=True)
     col_p50.button("+500만", on_click=adjust_lump, args=(500,), use_container_width=True)
 
-    col_m1, col_m5, col_m10, col_m50 = st.sidebar.columns(4)
-    col_m1.button("-10만", on_click=adjust_lump, args=(-10,), use_container_width=True)
+    col_m5, col_m10, col_m50 = st.sidebar.columns(3)
     col_m5.button("-50만", on_click=adjust_lump, args=(-50,), use_container_width=True)
     col_m10.button("-100만", on_click=adjust_lump, args=(-100,), use_container_width=True)
     col_m50.button("-500만", on_click=adjust_lump, args=(-500,), use_container_width=True)
