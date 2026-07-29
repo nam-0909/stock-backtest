@@ -415,4 +415,49 @@ if run_button:
                                 <h2 style="color: #212529; font-size: 30px;">{total_invested/10000:,.0f} 만원</h2>
                             </div>
                             <div>
-                                <h4 style="color: #6
+                                <h4 style="color: #6c757d; margin-bottom: 5px;">최종 평가 금액</h4>
+                                <h2 style="color: #212529; font-size: 30px;">{final_value/10000:,.0f} 만원</h2>
+                            </div>
+                            <div>
+                                <h4 style="color: #6c757d; margin-bottom: 5px;">총 수익금</h4>
+                                <h2 style="color: {color_code}; font-size: 36px; font-weight: bold;">{profit_amount/10000:+,.0f} 만원</h2>
+                            </div>
+                            <div>
+                                <h4 style="color: #6c757d; margin-bottom: 5px;">최종 수익률</h4>
+                                <h2 style="color: {color_code}; font-size: 36px; font-weight: bold;">{return_rate:+.2f}%</h2>
+                            </div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                # 2. 대형 고정 이미지 그래프 (고해상도 렌더링)
+                st.subheader("📈 자산 성장 추이 (고정 이미지 그래프)")
+                
+                # 가독성을 위해 그래프 사이즈 및 글자 크기 대폭 확대 (반응형 적용)
+                fig, ax = plt.subplots(figsize=(14, 6.5))
+                
+                inv_man = [v / 10000 for v in invested_history]
+                val_man = [v / 10000 for v in value_history]
+
+                # 선 두께 및 글자 크기 대폭 확대
+                ax.plot(dates, inv_man, label="투자 원금 (만원)", color="#1f77b4", linewidth=3)
+                ax.plot(dates, val_man, label="평가 금액 (만원)", color="#ff7f0e", linewidth=3)
+
+                ax.set_ylabel("금액 (만원)", fontsize=15, fontweight='bold', labelpad=15)
+                ax.grid(True, linestyle="--", alpha=0.5)
+                ax.legend(loc="upper left", fontsize=14)
+
+                # 축 눈금 글자 크기 확대 및 정돈
+                ax.tick_params(axis='x', labelsize=13)
+                ax.tick_params(axis='y', labelsize=13)
+
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                plt.xticks(rotation=0)
+                plt.tight_layout()
+
+                st.pyplot(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"계산 중 오류가 발생했습니다: {e}")
