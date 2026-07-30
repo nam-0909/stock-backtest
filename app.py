@@ -162,6 +162,9 @@ def load_kr_etf_db():
 
 KR_ETF_DB = load_kr_etf_db()
 
+# ETF 판별 키워드
+ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "ACE", "RISE", "SOL", "ARIRANG", "HANARO", "KBSTAR", "KOSEF", "PLUS", "TIMEFOLIO", "UNIFEX"]
+
 # ---------------------------------------------------------
 # [6] 실시간 시세 추출 Engine
 # ---------------------------------------------------------
@@ -206,7 +209,7 @@ def get_exact_realtime_price(ticker_symbol):
         return None
 
 # ---------------------------------------------------------
-# [7] 국내/해외 라이브 통합 검색 엔진 (복원 완료)
+# [7] 주식/ETF 엄격 분류 실시간 검색 엔진
 # ---------------------------------------------------------
 US_POPULAR_MAPPING = {
     "s&p": [("SPY", "SPDR S&P 500"), ("IVV", "iShares Core S&P 500"), ("VOO", "Vanguard S&P 500"), ("SPLG", "SPDR Portfolio S&P 500")],
@@ -230,10 +233,11 @@ def search_live_stocks(query, search_type="EQUITY"):
 
     q_clean = query.strip().lower()
 
-    # 1. 국내 주식/ETF 검색 (네이버 증권 자동완성 API)
+    # 1. 네이버 자동완성 API
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        url = f"https://ac.stock.naver.com/ac?q={query}&target=index,stock,etf"
+        target_param = "etf" if search_type == "ETF" else "stock"
+        url = f"https://ac.stock.naver.com/ac?q={query}&target={target_param}"
         res = requests.get(url, headers=headers, timeout=3).json()
         
         items = res.get('items', [])
@@ -242,25 +246,55 @@ def search_live_stocks(query, search_type="EQUITY"):
                 code = str(item[0]).strip()
                 name = str(item[1]).strip()
                 
-                # 숫자 6자리 종목코드인 경우 국내 주식/ETF
                 if code.isdigit() and len(code) == 6:
-                    results[f"[국내] {name} ({code})"] = f"{code}.KS"
+                    is_etf_name = any(kw in name.upper() for kw in ETF_KEYWORDS)
+                    
+                    if search_type == "EQUITY" and not is_etf_name:
+                        results[f"[국내] {name} ({code})"] = f"{code}.KS"
+                    elif search_type == "ETF" and (is_etf_name or name in KR_ETF_DB):
+                        results[f"[국내] {name} ({code})"] = f"{code}.KS"
     except Exception:
         pass
 
-    # 2. 국내 ETF DB 보완 검색 (네이버 ETF API 백업)
-    for name, ticker in KR_ETF_DB.items():
-        if q_clean in name.lower():
-            code = ticker.split('.')[0]
-            results[f"[국내] {name} ({code})"] = ticker
+    # 2. 네이버 검색 리스트 API (국내 개별주식 보완)
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        url = f"https://m.stock.naver.com/api/json/search/searchListJson.nhn?keyword={query}"
+        res = requests.get(url, headers=headers, timeout=3).json()
+        search_list = res.get('result', {}).get('searchList', [])
 
-    # 3. 미국 인기 키워드 매핑
+        for item in search_list:
+            stock_name = item.get('stockName', '')
+            item_code = item.get('itemCode', '')
+            reuters_code = item.get('reutersCode', '')
+            nation_info = item.get('nationInfo', '')
+
+            if (nation_info == 'KOR' or not nation_info) and item_code.isdigit() and len(item_code) == 6:
+                is_etf_name = any(kw in stock_name.upper() for kw in ETF_KEYWORDS)
+                
+                if search_type == "EQUITY" and not is_etf_name:
+                    results[f"[국내] {stock_name} ({item_code})"] = f"{item_code}.KS"
+                elif search_type == "ETF" and is_etf_name:
+                    results[f"[국내] {stock_name} ({item_code})"] = f"{item_code}.KS"
+    except Exception:
+        pass
+
+    # 3. ETF 탭인 경우 전체 ETF DB 매칭
+    if search_type == "ETF":
+        for name, ticker in KR_ETF_DB.items():
+            if q_clean in name.lower():
+                code = ticker.split('.')[0]
+                results[f"[국내] {name} ({code})"] = ticker
+
+    # 4. 미국 인기 키워드 매핑
     for key, items_list in US_POPULAR_MAPPING.items():
         if key in q_clean:
             for symbol, desc in items_list:
-                results[f"[해외] {desc} ({symbol})"] = symbol
+                is_us_etf = any(tag in symbol or tag in desc.upper() for tag in ["ETF", "QQQ", "SPY", "VOO", "IVV", "SCHD", "DIA", "SOXL", "SOXX", "SPLG", "TQQQ", "SMH"])
+                if (search_type == "ETF" and is_us_etf) or (search_type == "EQUITY" and not is_us_etf):
+                    results[f"[해외] {desc} ({symbol})"] = symbol
 
-    # 4. Yahoo Finance 해외 검색 API
+    # 5. Yahoo Finance 해외 검색 API
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=20&newsCount=0"
@@ -269,8 +303,13 @@ def search_live_stocks(query, search_type="EQUITY"):
             for item in res['quotes']:
                 symbol = item.get('symbol', '')
                 shortname = item.get('shortname') or item.get('longname') or symbol
+                quote_type = item.get('quoteType', '')
+                
                 if symbol and '.' not in symbol and not symbol.isdigit():
-                    results[f"[해외] {shortname} ({symbol})"] = symbol
+                    if search_type == "EQUITY" and quote_type in ["EQUITY"]:
+                        results[f"[해외] {shortname} ({symbol})"] = symbol
+                    elif search_type == "ETF" and quote_type in ["ETF", "MUTUALFUND"]:
+                        results[f"[해외] {shortname} ({symbol})"] = symbol
     except Exception:
         pass
 
@@ -286,9 +325,9 @@ search_category = st.sidebar.radio(
     ["🏢 개별 주식 검색", "🧺 ETF 전용 검색"]
 )
 
-default_kw = "삼성" if "개별 주식" in search_category else "KODEX"
+default_kw = "삼성전자" if "개별 주식" in search_category else "KODEX"
 keyword_input = st.sidebar.text_input(
-    "종목명 또는 티커 입력 (예: 삼성전자, 한화, KODEX, AAPL, QQQ)",
+    "종목명 또는 티커 입력 (예: 삼성전자, 카카오, AAPL, KODEX, QQQ)",
     value=default_kw
 )
 
