@@ -143,7 +143,7 @@ def adjust_lump(delta):
     st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
 
 # ---------------------------------------------------------
-# [5] KRX 전체 상장 종목 & ETF 로컬 캐싱 엔진 (핵심 수정)
+# [5] KRX 전체 상장 종목 & 국내 ETF 완벽 매핑 DB 캐싱
 # ---------------------------------------------------------
 ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "ACE", "RISE", "SOL", "ARIRANG", "HANARO", "KBSTAR", "KOSEF", "PLUS", "TIMEFOLIO", "UNIFEX"]
 
@@ -151,22 +151,34 @@ ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "ACE", "RISE", "SOL", "ARIRANG", "HANAR
 def load_krx_master_db():
     stock_dict = {}
     etf_dict = {}
+    
+    # 1. 국내 상장 ETF 전체 목록 가져오기 (ETF 전용 API)
     try:
-        # KRX 전체 상장 종목 불러오기
+        df_etf = fdr.StockListing('ETF/KR')
+        for _, row in df_etf.iterrows():
+            code = str(row['Symbol']).zfill(6) if 'Symbol' in row else str(row['Code']).zfill(6)
+            name = str(row['Name']).strip()
+            full_ticker = f"{code}.KS"
+            etf_dict[name] = (code, full_ticker)
+    except Exception:
+        pass
+
+    # 2. KRX 주식 상장 종목 가져오기
+    try:
         df_krx = fdr.StockListing('KRX')
         for _, row in df_krx.iterrows():
             code = str(row['Code']).zfill(6)
             name = str(row['Name']).strip()
             market = str(row.get('Market', '')).upper()
             
-            # 코스닥 시장 구분 처리 (yfinance 티커 형식 지정)
             suffix = ".KQ" if market == 'KOSDAQ' else ".KS"
             full_ticker = f"{code}{suffix}"
             
-            is_etf = any(kw in name.upper() for kw in ETF_KEYWORDS)
+            is_etf = any(kw in name.upper() for kw in ETF_KEYWORDS) or (market == 'ETF')
             
             if is_etf:
-                etf_dict[name] = (code, full_ticker)
+                if name not in etf_dict:
+                    etf_dict[name] = (code, f"{code}.KS")
             else:
                 stock_dict[name] = (code, full_ticker)
     except Exception:
@@ -207,7 +219,7 @@ def get_exact_realtime_price(ticker_symbol):
         return None
 
 # ---------------------------------------------------------
-# [7] 로컬 DB 기반 초고속 100% 검색 엔진
+# [7] 로컬 DB 기반 개별 주식 & ETF 완벽 분리 검색 엔진
 # ---------------------------------------------------------
 US_POPULAR_MAPPING = {
     "s&p": [("SPY", "SPDR S&P 500"), ("IVV", "iShares Core S&P 500"), ("VOO", "Vanguard S&P 500"), ("SPLG", "SPDR Portfolio S&P 500")],
@@ -231,7 +243,7 @@ def search_live_stocks(query, search_type="EQUITY"):
 
     q_clean = query.strip().lower()
 
-    # 1. 국내 데이터베이스 매칭 (FinanceDataReader 기반)
+    # 1. 국내 데이터베이스 매칭
     target_db = KR_STOCK_DB if search_type == "EQUITY" else KR_ETF_DB
     
     for name, (code, ticker) in target_db.items():
