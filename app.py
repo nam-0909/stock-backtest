@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import FinanceDataReader as fdr
 import requests
 import time
 import os
@@ -142,30 +143,38 @@ def adjust_lump(delta):
     st.session_state.lump_amount = max(10, st.session_state.lump_amount + delta)
 
 # ---------------------------------------------------------
-# [5] 국내 전체 ETF DB 캐싱 로직
+# [5] KRX 전체 상장 종목 & ETF 로컬 캐싱 엔진 (핵심 수정)
 # ---------------------------------------------------------
 ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "ACE", "RISE", "SOL", "ARIRANG", "HANARO", "KBSTAR", "KOSEF", "PLUS", "TIMEFOLIO", "UNIFEX"]
 
 @st.cache_data(ttl=86400)
-def load_kr_etf_db():
-    etf_map = {}
+def load_krx_master_db():
+    stock_dict = {}
+    etf_dict = {}
     try:
-        url = "https://finance.naver.com/api/sise/etfItemList.nhn"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Referer': 'https://finance.naver.com/'
-        }
-        res = requests.get(url, headers=headers, timeout=5).json()
-        for item in res.get('result', {}).get('etfItemList', []):
-            code = item.get('itemcode')
-            name = item.get('itemname')
-            if code and name:
-                etf_map[name] = f"{code}.KS"
+        # KRX 전체 상장 종목 불러오기
+        df_krx = fdr.StockListing('KRX')
+        for _, row in df_krx.iterrows():
+            code = str(row['Code']).zfill(6)
+            name = str(row['Name']).strip()
+            market = str(row.get('Market', '')).upper()
+            
+            # 코스닥 시장 구분 처리 (yfinance 티커 형식 지정)
+            suffix = ".KQ" if market == 'KOSDAQ' else ".KS"
+            full_ticker = f"{code}{suffix}"
+            
+            is_etf = any(kw in name.upper() for kw in ETF_KEYWORDS)
+            
+            if is_etf:
+                etf_dict[name] = (code, full_ticker)
+            else:
+                stock_dict[name] = (code, full_ticker)
     except Exception:
         pass
-    return etf_map
 
-KR_ETF_DB = load_kr_etf_db()
+    return stock_dict, etf_dict
+
+KR_STOCK_DB, KR_ETF_DB = load_krx_master_db()
 
 # ---------------------------------------------------------
 # [6] 실시간 시세 추출 Engine
@@ -188,19 +197,6 @@ def get_exact_realtime_price(ticker_symbol):
             return price
         except Exception:
             pass
-    else:
-        try:
-            url = f"https://m.stock.naver.com/api/html/item/getGfItemHeader.nhn?symbol={ticker_symbol}&_t={timestamp}"
-            res = requests.get(url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(res.text, 'html.parser')
-                price_elem = soup.find('span', class_='stock_price')
-                if price_elem:
-                    price = float(price_elem.text.replace(',', '').replace('$', '').strip())
-                    return price
-        except Exception:
-            pass
 
     try:
         t = yf.Ticker(ticker_symbol)
@@ -211,7 +207,7 @@ def get_exact_realtime_price(ticker_symbol):
         return None
 
 # ---------------------------------------------------------
-# [7] 국내/해외 라이브 통합 검색 엔진 (차단 해제 및 다중 소스 연동)
+# [7] 로컬 DB 기반 초고속 100% 검색 엔진
 # ---------------------------------------------------------
 US_POPULAR_MAPPING = {
     "s&p": [("SPY", "SPDR S&P 500"), ("IVV", "iShares Core S&P 500"), ("VOO", "Vanguard S&P 500"), ("SPLG", "SPDR Portfolio S&P 500")],
@@ -235,60 +231,14 @@ def search_live_stocks(query, search_type="EQUITY"):
 
     q_clean = query.strip().lower()
 
-    # 1. 네이버 모바일 통합 주식 검색 API (Referer 헤더 필수 적용)
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://m.stock.naver.com/'
-        }
-        url = f"https://m.stock.naver.com/api/json/search/searchListJson.nhn?keyword={query}"
-        res = requests.get(url, headers=headers, timeout=3).json()
-        search_list = res.get('result', {}).get('searchList', [])
+    # 1. 국내 데이터베이스 매칭 (FinanceDataReader 기반)
+    target_db = KR_STOCK_DB if search_type == "EQUITY" else KR_ETF_DB
+    
+    for name, (code, ticker) in target_db.items():
+        if q_clean in name.lower() or q_clean == code:
+            results[f"[국내] {name} ({code})"] = ticker
 
-        for item in search_list:
-            stock_name = item.get('stockName', '')
-            item_code = item.get('itemCode', '')
-            nation_info = item.get('nationInfo', '')
-
-            if (nation_info == 'KOR' or not nation_info) and item_code.isdigit() and len(item_code) == 6:
-                is_etf = any(kw in stock_name.upper() for kw in ETF_KEYWORDS) or (stock_name in KR_ETF_DB)
-                ticker_full = f"{item_code}.KS"
-                
-                if search_type == "EQUITY" and not is_etf:
-                    results[f"[국내] {stock_name} ({item_code})"] = ticker_full
-                elif search_type == "ETF" and is_etf:
-                    results[f"[국내] {stock_name} ({item_code})"] = ticker_full
-    except Exception:
-        pass
-
-    # 2. 백업 소스: FinanceData 개별 주식 오픈 API 연동
-    if search_type == "EQUITY" and len(results) == 0:
-        try:
-            url = f"https://raw.githubusercontent.com/FinanceData/marcap/master/data/marcap-2024.csv"
-            # 실시간 파이낸스 인덱스 검색 백업 API
-            backup_url = f"https://ac.finance.naver.com/ac?q={query}&target=stock"
-            headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.naver.com/'}
-            res = requests.get(backup_url, headers=headers, timeout=3).json()
-            items = res.get('items', [])
-            for item in items:
-                if isinstance(item, list) and len(item) >= 2:
-                    code = str(item[0]).strip()
-                    name = str(item[1]).strip()
-                    if code.isdigit() and len(code) == 6:
-                        is_etf = any(kw in name.upper() for kw in ETF_KEYWORDS) or (name in KR_ETF_DB)
-                        if not is_etf:
-                            results[f"[국내] {name} ({code})"] = f"{code}.KS"
-        except Exception:
-            pass
-
-    # 3. ETF 탭인 경우 전체 ETF DB 직접 검색
-    if search_type == "ETF":
-        for name, ticker in KR_ETF_DB.items():
-            if q_clean in name.lower():
-                code = ticker.split('.')[0]
-                results[f"[국내] {name} ({code})"] = ticker
-
-    # 4. 미국 인기 키워드 매핑
+    # 2. 미국 인기 키워드 매핑
     for key, items_list in US_POPULAR_MAPPING.items():
         if key in q_clean:
             for symbol, desc in items_list:
@@ -296,10 +246,10 @@ def search_live_stocks(query, search_type="EQUITY"):
                 if (search_type == "ETF" and is_us_etf) or (search_type == "EQUITY" and not is_us_etf):
                     results[f"[해외] {desc} ({symbol})"] = symbol
 
-    # 5. Yahoo Finance 해외 검색 API
+    # 3. Yahoo Finance 해외 주식/ETF 검색 API
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=20&newsCount=0"
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=15&newsCount=0"
         res = requests.get(url, headers=headers, timeout=3).json()
         if 'quotes' in res:
             for item in res['quotes']:
